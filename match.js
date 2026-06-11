@@ -263,7 +263,7 @@ function startUserBowl(target){
   MT.myXI.forEach(p=>ovLeft[p.id]=maxOv);
   MT.B={xi:MT.oppXI,st:0,ns:1,nx:2,runs:0,w:0,b:0,innR:{},innB:{},target,
     balls:G.overs*6,ovLeft,lastBw:null,bw:null,tgt:{lx:2,len:0.7},
-    needleT0:0,acc:0,out:null,justPicked:false};
+    needleT0:0,acc:0,out:null,justPicked:false,spinDir:1};
   MT.phase="b_pick";
   genField();
   setSkip(true);
@@ -274,6 +274,9 @@ function startUserBowl(target){
       "&nbsp;&nbsp;<span class='grn'>Good length / yorker</span> = wickets. <span class='red'>Short or leg-side</span> = runs.<br>"+
       "2. PRESS &amp; HOLD to run in — the meter climbs.<br>"+
       "3. RELEASE at the top of the green band for a perfect delivery.<br><br>"+
+      "<span class='ac'>SPINNERS:</span> the meter is your revs — press S (or tap the chip) to flip between "+
+      "<span class='grn'>OFF BREAK</span> (turns in) and <span class='grn'>LEG BREAK</span> (turns away). "+
+      "Pitch it outside the line and rip it back to beat the bat.<br><br>"+
       "Overshoot and you'll spray it (or overstep: NO BALL). You pick a fresh bowler every over.</p>",
       [["GOT IT",'ui_tutBDone()']]);
     return;
@@ -310,7 +313,14 @@ function newBowlBall(){
   MT.timing="";MT.flash=null;MT.anim=null;MT.B.out=null;
   MT.trail=[];
   genField();
-  MT.sub=shortName(MT.B.bw.name)+" to "+shortName(MT.B.xi[MT.B.st].name)+" — AIM ✕, HOLD, RELEASE AT TOP";
+  MT.sub=shortName(MT.B.bw.name)+" to "+shortName(MT.B.xi[MT.B.st].name)+
+    (MT.B.bw.spin?" — S: FLIP SPIN • AIM ✕, HOLD, RIP AT TOP":" — AIM ✕, HOLD, RELEASE AT TOP");
+}
+// spin meter is slower — it's about revs, not pace
+function runT(){return MT.B&&MT.B.bw&&MT.B.bw.spin?950:750;}
+function toggleSpin(){
+  const B=MT.B;if(!B||!B.bw||!B.bw.spin)return;
+  B.spinDir*=-1;sfx("ui");
 }
 function aiAggr(){
   const B=MT.B;
@@ -324,19 +334,38 @@ function resolveBowl(acc){
   const slop=(1-acc)*(1.3-skill*0.5);
   const lx=CL(B.tgt.lx+(R(2)-1)*slop*9,-16,16);
   const len=CL(B.tgt.len+(R(2)-1)*slop*0.28,0.2,1.0);
-  if(acc<0.12&&R()<0.5){B.out={kind:"nb"};return;}
-  if(Math.abs(lx)>12.5){B.out={kind:"wd",lx,len};return;}
-  let lenScore=len>0.97?0.25:len>0.86?0.92:len>0.62?1.0:len>0.45?0.68:0.48;
-  let lineScore=Math.abs(lx)<=6?1:Math.abs(lx)<=10?0.85:0.62;
-  const q=lenScore*lineScore*(0.55+0.45*acc);
+  const isSpin=!!bw.spin,dir=B.spinDir||1;
+  // rip = post-bounce turn in line units; release accuracy IS the revs
+  const turn=isSpin?(2.5+6.5*acc)*(0.6+0.4*skill)+R(1.5):0;
+  const flx=CL(lx+dir*turn,-18,18); // final line after turn
+  B.flyT=isSpin?900:700;
+  if(acc<0.12&&R()<(isSpin?0.25:0.5)){B.out={kind:"nb"};return;}
+  if(Math.abs(isSpin?flx:lx)>12.5){B.out={kind:"wd",lx,len,spin:isSpin,dir,turn,flx};return;}
+  let lenScore,lineScore;
+  if(isSpin){
+    // full tosses get launched, short spin gets pulled; line judged AFTER the turn
+    lenScore=len>0.97?0.18:len>0.86?0.8:len>0.62?1.0:len>0.45?0.72:0.42;
+    lineScore=Math.abs(flx)<=4?1:Math.abs(flx)<=8?0.85:0.6;
+  }else{
+    lenScore=len>0.97?0.25:len>0.86?0.92:len>0.62?1.0:len>0.45?0.68:0.48;
+    lineScore=Math.abs(lx)<=6?1:Math.abs(lx)<=10?0.85:0.62;
+  }
+  let q=lenScore*lineScore*(0.55+0.45*acc);
+  // beat the bat: pitched outside the line, ripped back at the stumps
+  const beat=isSpin&&Math.abs(lx)>5&&Math.abs(flx)<=5;
+  if(beat)q=Math.min(q*1.18,1);
   const adj=effBowl(bw)+G.coach.bowl*0.25+(q-0.55)*4.5;
   let out=simBall(effBat(bat)+0.5,adj,aiAggr());
   if(out==="wd")out=0;
-  if(q>0.85&&out===0&&R()<0.12)out="W";
+  if(q>0.85&&out===0&&R()<(isSpin?0.16:0.12))out="W";
   if(q<0.35&&(out===0||out===1)&&R()<0.3)out=4;
   let wktType=null;
-  if(out==="W")wktType=len>0.85?CH(["BOWLED","BOWLED","LBW"]):len>0.55?CH(["CAUGHT BEHIND","LBW","BOWLED"]):"CAUGHT";
-  B.out={kind:"ball",r:out==="W"?0:out,wkt:wktType,lx,len,q};
+  if(out==="W"){
+    if(isSpin)wktType=dir>0?(len>0.84?CH(["BOWLED","LBW","STUMPED"]):CH(["BOWLED","LBW","CAUGHT"]))
+      :CH(["CAUGHT BEHIND","STUMPED","BOWLED"]);
+    else wktType=len>0.85?CH(["BOWLED","BOWLED","LBW"]):len>0.55?CH(["CAUGHT BEHIND","LBW","BOWLED"]):"CAUGHT";
+  }
+  B.out={kind:"ball",r:out==="W"?0:out,wkt:wktType,lx,len,q,spin:isSpin,dir,turn,flx,beat};
 }
 function applyBowlBall(){
   const B=MT.B,bw=B.bw,bat=B.xi[B.st],o=B.out;
@@ -359,7 +388,7 @@ function applyBowlBall(){
     B.runs+=r;bat.s.runs+=r;B.innR[bat.id]=(B.innR[bat.id]||0)+r;bw.s.conc+=r;
     if(r===4){sfx("four");setFlash("FOUR CONCEDED","#ff5e5e");}
     else if(r===6){sfx("six");setFlash("SIX! THAT'S HUGE","#ff5e5e");MT.shakeUntil=performance.now()+260;}
-    else if(r===0){sfx("hit");setFlash(o.q>0.85?"DOT — JAFFA!":"DOT BALL","#6ee76e");}
+    else if(r===0){sfx("hit");setFlash(o.beat?"DOT — RIPPED PAST THE BAT!":o.q>0.85?"DOT — JAFFA!":"DOT BALL","#6ee76e");}
     else{sfx("hit");setFlash(r+" RUN"+(r>1?"S":""));}
     const d=r>=4?1.02:(0.3+0.2*r);
     MT.anim={fx:CV.BX,fy:CV.BY,tx:CV.BX+Math.cos(ang)*tBound(ang)*d,ty:CV.BY+Math.sin(ang)*tBound(ang)*d,t0:performance.now(),dur:600};
@@ -480,7 +509,7 @@ function mSnap(){
   const o={...base,mode:MT.mode,endInn:!!MT.endInn,
     S:{st:S.st,ns:S.ns,nx:S.nx,runs:S.runs,w:S.w,b:S.b,
        innR:S.innR,innB:S.innB,target:S.target,balls:S.balls}};
-  if(MT.mode==="bowl"){o.S.ovLeft=S.ovLeft;o.S.lastBw=S.lastBw;o.S.bw=S.bw?S.bw.id:null;}
+  if(MT.mode==="bowl"){o.S.ovLeft=S.ovLeft;o.S.lastBw=S.lastBw;o.S.bw=S.bw?S.bw.id:null;o.S.spinDir=S.spinDir;}
   return o;
 }
 function resumeMatch(){
@@ -517,7 +546,7 @@ function resumeMatch(){
       innR:S.innR,innB:S.innB,target:S.target,balls:S.balls,
       ovLeft:S.ovLeft,lastBw:S.lastBw,
       bw:S.bw!=null?myXI.find(p=>p.id===S.bw)||null:null,
-      tgt:{lx:2,len:0.7},needleT0:0,acc:0,out:null,justPicked:false};
+      tgt:{lx:2,len:0.7},needleT0:0,acc:0,out:null,justPicked:false,spinDir:S.spinDir||1};
     genField();
     setSkip(true);
     if(m.endInn){MT.endInn=false;endInnings();}
@@ -569,8 +598,15 @@ function renderMatchScreen(){
     if(e.key==="z"||e.key==="Z"){if(MT.phase==="flight")resolveSwing(performance.now()-(MT.t0+MT.T),0);}
     if(e.key==="x"||e.key==="X"){if(MT.phase==="flight")resolveSwing(performance.now()-(MT.t0+MT.T),32);}
     if(e.key==="c"||e.key==="C"){if(MT.phase==="flight")resolveSwing(performance.now()-(MT.t0+MT.T),60);}
-    if(e.key==="ArrowLeft")MT.aim-=0.13;
-    if(e.key==="ArrowRight")MT.aim+=0.13;
+    if(e.key==="s"||e.key==="S"){if(MT.phase==="b_aim")toggleSpin();}
+    if(e.key==="ArrowLeft"){
+      if(MT.phase==="b_aim"){if(MT.B&&MT.B.spinDir!==-1)toggleSpin();}
+      else MT.aim-=0.13;
+    }
+    if(e.key==="ArrowRight"){
+      if(MT.phase==="b_aim"){if(MT.B&&MT.B.spinDir!==1)toggleSpin();}
+      else MT.aim+=0.13;
+    }
   };
 }
 function setSkip(show){
@@ -584,7 +620,11 @@ function onDown(x,y){
     if(MT.phase==="ready"){MT.phase="runup";MT.t0=performance.now();sfx("ui");MT.sub="";}
     if(MT.phase==="runup"||MT.phase==="flight"){MT.drag.on=true;MT.drag.sx=x;MT.drag.sy=y;MT.drag.len=0;}
   }else if(MT.mode==="bowl"){
-    if(MT.phase==="b_aim"){MT.phase="b_run";MT.B.needleT0=performance.now();sfx("ui");}
+    if(MT.phase==="b_aim"){
+      // tap on the spin chip (bottom-left) flips direction instead of starting the run-up
+      if(MT.B.bw&&MT.B.bw.spin&&x>=34&&x<=118&&y>=SC.H-28&&y<=SC.H-8){toggleSpin();return;}
+      MT.phase="b_run";MT.B.needleT0=performance.now();sfx("ui");
+    }
   }
 }
 function onMove(x,y){
@@ -607,10 +647,11 @@ function onUp(){
     MT.drag.on=false;
     if(MT.phase==="flight")resolveSwing(performance.now()-(MT.t0+MT.T),MT.drag.len);
   }else if(MT.mode==="bowl"&&MT.phase==="b_run"){
-    const v=(performance.now()-MT.B.needleT0)/750;
+    const v=(performance.now()-MT.B.needleT0)/runT();
     const acc=v<=1?CL(1-(1-v)*2.2,0,1):CL(1-(v-1)*3.2,0,1);
     resolveBowl(acc);
-    MT.timing=acc>0.92?"PERFECT!":acc>0.7?"GOOD":acc>0.4?"LOOSE":"SPRAYED";
+    MT.timing=MT.B.bw.spin?(acc>0.92?"RIPPER!":acc>0.7?"GOOD REVS":acc>0.4?"LOOSE":"DRAGGED")
+      :(acc>0.92?"PERFECT!":acc>0.7?"GOOD":acc>0.4?"LOOSE":"SPRAYED");
     MT.phase="b_fly";MT.t0=performance.now();
   }
 }
@@ -626,8 +667,8 @@ function mLoop(ts){
     }
     else if(MT.phase==="rundecide"&&ts>MT.decideUntil)gambleStay();
   }else if(MT.mode==="bowl"){
-    if(MT.phase==="b_run"&&ts-MT.B.needleT0>750*1.35){onUp();}
-    else if(MT.phase==="b_fly"&&ts-MT.t0>700){applyBowlBall();}
+    if(MT.phase==="b_run"&&ts-MT.B.needleT0>runT()*1.35){onUp();}
+    else if(MT.phase==="b_fly"&&ts-MT.t0>(MT.B.flyT||700)){applyBowlBall();}
     else if(MT.phase==="b_result"&&ts-MT.t0>1300)advanceBowl();
   }
   drawFP(ts);
@@ -827,7 +868,7 @@ function drawFP(ts){
   // camera bob while running in to bowl
   c.save();
   if(MT.mode==="bowl"&&MT.phase==="b_run"){
-    const v=CL((ts-MT.B.needleT0)/750,0,1.3);
+    const v=CL((ts-MT.B.needleT0)/runT(),0,1.3);
     const k=1+0.05*v;
     c.translate(SC.CXX,SC.NEAR);c.scale(k,k);c.translate(-SC.CXX,-SC.NEAR);
     c.translate(Math.sin(ts/52)*1.6*v,Math.sin(ts/26)*1.2*v);
@@ -1041,21 +1082,39 @@ function sceneBowl(c,ts){
     c.font="bold 6px monospace";c.textAlign="center";
     c.fillStyle=(zone==="GOOD LENGTH"||zone==="YORKER")?"#6ee76e":(zone==="SHORT"||zone==="FULL TOSS")?"#ff5e5e":"#ffd84d";
     c.fillText(zone,x,y-9.5);
+    // spin: arrow off the reticle showing which way it'll turn after the bounce
+    if(B.bw&&B.bw.spin){
+      const d=B.spinDir||1;
+      c.strokeStyle="rgba(110,231,231,"+pulse+")";c.lineWidth=1.2;
+      c.beginPath();c.moveTo(x,y);
+      c.quadraticCurveTo(x+d*5,y-3,x+d*9,y-4);c.stroke();
+      c.fillStyle="rgba(110,231,231,"+pulse+")";
+      c.beginPath();c.moveTo(x+d*9,y-7);c.lineTo(x+d*12,y-4);c.lineTo(x+d*9,y-1.5);c.closePath();c.fill();
+    }
   }
-  // delivery flying away + trail
+  // delivery flying away + trail (spin: loopier flight, bends to its final line after the bounce)
   if(MT.phase==="b_fly"){
-    const t=CL((ts-MT.t0)/700,0,1);
+    const t=CL((ts-MT.t0)/(B.flyT||700),0,1);
     const o=B.out||{lx:0,len:0.7};
     const lx=o.lx||0,len=o.len||0.7;
-    const x=SC.CXX+(pitchX(lx,1)-SC.CXX)*t;
+    let x=SC.CXX+(pitchX(lx,1)-SC.CXX)*t;
+    if(o.spin&&t>len){
+      const u=CL((t-len)/Math.max(1-len,0.05),0,1);
+      x+=(pitchX(o.flx,1)-pitchX(lx,1))*u;
+    }
     let h;
-    if(t<len)h=14*(1-t/Math.max(len,0.01));
+    const loft=o.spin?18:14;
+    if(t<len)h=loft*(1-t/Math.max(len,0.01));
     else h=10*Math.sin(Math.PI*CL((t-len)/Math.max(1-len,0.05),0,1));
     const y=SC.NEAR-SC.SPAN*t-h*(1-t*0.6);
     const r=CL(3-2.2*t,0.8,3);
     MT.trail.push({x,y,r});if(MT.trail.length>7)MT.trail.shift();
     drawTrail(c);
-    if(Math.abs(t-len)<0.04){c.fillStyle="rgba(255,255,255,.5)";c.fillRect(pitchX(lx*0.9,len)-2,SC.NEAR-SC.SPAN*len,4,2);}
+    if(Math.abs(t-len)<0.04){
+      const big=o.spin&&o.turn>6;
+      c.fillStyle=big?"rgba(110,231,231,.6)":"rgba(255,255,255,.5)";
+      c.fillRect(pitchX(lx*0.9,len)-(big?3:2),SC.NEAR-SC.SPAN*len,big?6:4,2);
+    }
     ballSprite(c,x,y,r);
   }
 }
@@ -1071,7 +1130,7 @@ function uiBowl(c,ts){
     c.fillStyle="rgba(110,231,110,.4)";c.fillRect(mx-5,my,14,mh*0.14);
     c.fillStyle="#6ee76e";c.fillRect(mx-5,my,14,1);
     if(MT.phase==="b_run"){
-      const v=CL((ts-MT.B.needleT0)/750,0,1.35);
+      const v=CL((ts-MT.B.needleT0)/runT(),0,1.35);
       const fillH=CL(v,0,1)*mh;
       const g=c.createLinearGradient(0,my+mh,0,my);
       g.addColorStop(0,"#ffd84d");g.addColorStop(0.75,"#ff8c42");g.addColorStop(1,"#6ee76e");
@@ -1080,11 +1139,21 @@ function uiBowl(c,ts){
       if(v>1){c.fillStyle="#ff5e5e";c.fillRect(mx-5,my-3,14,3);}
     }
     c.font="bold 6px monospace";c.textAlign="center";c.fillStyle="#8a8fa8";
-    c.fillText("PWR",mx+2,my+mh+16);
+    c.fillText(B.bw&&B.bw.spin?"REV":"PWR",mx+2,my+mh+16);
+  }
+  // spin chip: shows turn direction, tap (or S / arrows) to flip
+  if(B.bw&&B.bw.spin&&(MT.phase==="b_aim"||MT.phase==="b_run")){
+    const d=B.spinDir||1;
+    const label=d>0?"OFF BREAK ▶":"◀ LEG BREAK";
+    c.fillStyle="rgba(8,10,16,.78)";c.fillRect(34,SC.H-28,84,20);
+    c.strokeStyle=MT.phase==="b_aim"?"#6ee7e7":"#3a4260";c.lineWidth=1;c.strokeRect(34,SC.H-28,84,20);
+    c.font="bold 6px monospace";c.textAlign="center";
+    c.fillStyle="#6ee7e7";c.fillText(label,76,SC.H-20);
+    c.fillStyle="#8a8fa8";c.fillText(d>0?"TURNS IN":"TURNS AWAY",76,SC.H-12);
   }
   // bowler's hand + ball, pumping during run
   if(MT.phase==="b_aim"||MT.phase==="b_run"){
-    const v=MT.phase==="b_run"?CL((ts-MT.B.needleT0)/750,0,1.3):0;
+    const v=MT.phase==="b_run"?CL((ts-MT.B.needleT0)/runT(),0,1.3):0;
     const bob=MT.phase==="b_run"?Math.sin(ts/55)*4*CL(v+0.3,0,1):Math.sin(ts/400)*1.5;
     const hx=SC.CXX+30,hy=SC.H-16+bob;
     c.fillStyle="rgba(4,5,9,.3)";c.fillRect(hx-7,hy+5,16,3);
