@@ -3,6 +3,7 @@
 const CAP = 110; // salary cap in crores
 let G = null;    // the whole game state (JSON-serializable)
 let PID = 1;
+let RESUME_M = null; // mid-match snapshot loaded from save, consumed by resumeMatch()
 
 // ---- utils
 const R  = (n=1)=>Math.random()*n;
@@ -406,18 +407,18 @@ function postMatchUser(won,xi){
 
 // ---- news / save / init
 function news(t){G.news.unshift("S"+G.season+" • "+t);if(G.news.length>40)G.news.length=40;}
-function save(){try{localStorage.setItem("rc_save1",JSON.stringify({G,PID}));}catch(e){}}
+function save(){try{localStorage.setItem("rc_save1",JSON.stringify({G,PID,M:typeof mSnap==="function"?mSnap():null}));}catch(e){}}
 function load(){
   try{
     const d=localStorage.getItem("rc_save1");
     if(!d)return false;
-    const o=JSON.parse(d);G=o.G;PID=o.PID;
+    const o=JSON.parse(d);G=o.G;PID=o.PID;RESUME_M=o.M||null;
     return !!(G&&G.teams);
   }catch(e){return false;}
 }
-function wipeSave(){localStorage.removeItem("rc_save1");G=null;}
+function wipeSave(){localStorage.removeItem("rc_save1");G=null;RESUME_M=null;}
 function initGame(tid){
-  PID=1;
+  PID=1;RESUME_M=null;
   G={my:tid,season:1,round:0,overs:5,credits:30,fans:50,trust:60,
     off:false,po:null,madePO:false,tut:0,curTab:"SQUAD",sel:null,
     fac:{train:1,physio:1,academy:1},coach:{bat:1,bowl:1,fld:1},
@@ -433,6 +434,7 @@ function initGame(tid){
   save();
 }
 function transferTeam(tid){
+  RESUME_M=null;
   G.my=tid;G.trust=60;G.fans=50;
   G.fac={train:1,physio:1,academy:1};G.coach={bat:1,bowl:1,fld:1};
   G.lineup=autoXI(myTeam()).map(p=>p.id);

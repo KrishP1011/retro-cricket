@@ -22,13 +22,13 @@ function renderTitle(hasSave){
   document.getElementById("app").innerHTML=
     '<div class="logo"><h1>RETRO<br>CRICKET</h1><div class="sub">★ IPL EDITION ★</div></div>'+
     '<div class="center">'+
-    (hasSave?'<button class="btn primary" onclick="ui_continue()">CONTINUE CAREER</button>':"")+
+    (hasSave?'<button class="btn primary" onclick="ui_continue()">'+(RESUME_M?"RESUME MATCH":"CONTINUE CAREER")+'</button>':"")+
     '<button class="btn primary" onclick="ui_new()">NEW CAREER</button>'+
     '<p class="dim" style="margin-top:26px" >10 REAL TEAMS • 130+ REAL PLAYERS • COACHES • MEDIA • TROPHIES</p>'+
     '<p class="dim blink" style="margin-top:14px">INSERT COIN</p></div>';
 }
 function ui_new(){sfx("ui");TS_KEEP=false;renderTeamSelect();}
-function ui_continue(){sfx("ui");goHub(G.curTab||"SQUAD");}
+function ui_continue(){sfx("ui");if(RESUME_M){resumeMatch();return;}goHub(G.curTab||"SQUAD");}
 function renderTeamSelect(){
   const cards=TEAMS.map(t=>{
     const r=teamRating(SQUADS[t.id]);
@@ -390,3 +390,10 @@ function ui_wipe2(){wipeSave();closeModal();renderTitle(false);}
 
 // ---- boot
 window.addEventListener("load",()=>{renderTitle(load());});
+
+// flush hub state when the tab closes or backgrounds. Skipped during a live
+// match: per-ball checkpoints are the only points where G + match snapshot
+// are consistent (a mid-ball flush could pair half-applied stats with a
+// stale snapshot and double-count the ball on resume).
+window.addEventListener("pagehide",()=>{if(G&&!MT)save();});
+document.addEventListener("visibilitychange",()=>{if(document.hidden&&G&&!MT)save();});

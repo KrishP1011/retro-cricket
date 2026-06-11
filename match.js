@@ -15,6 +15,7 @@ const CROWD_COLS=["#d8c27a","#b06ee7","#6ee7e7","#e76e6e","#7ae77a","#e8e4d0","#
 const AD_COLS=["#7a1f2b","#1f3a7a","#7a6a1f","#2b7a3a","#5a2b7a","#1f6a7a"];
 
 function startMatch(oppId,stage){
+  RESUME_M=null;
   const my=myTeam(),opp=team(oppId);
   const myXI=userXI(),oppXI=autoXI(opp);
   [...myXI,...oppXI].forEach(p=>p.s.m++);
@@ -26,7 +27,7 @@ function startMatch(oppId,stage){
     shotAng:0,lastGap:null,pend:null,decideUntil:0,chase:null,particles:[],
     crowd:genCrowdFP(),stars:genStars(),trail:[],
     shakeUntil:0,cheerUntil:0,swingT0:0,hurtUntil:0,
-    raf:0,done:false};
+    raf:0,done:false,brk:false,endInn:false};
   renderMatchScreen();
   MT.raf=requestAnimationFrame(mLoop);
   if(Math.random()<.5){
@@ -53,10 +54,11 @@ function beginInnings(){
 // BATTING (batter's eye)
 // ============================================================
 function startUserBat(target){
-  MT.mode="bat";
+  MT.mode="bat";MT.brk=false;
   MT.U={xi:MT.myXI,bws:bowlersOf(MT.oppXI),runs:0,w:0,b:0,st:0,ns:1,nx:2,
     innR:{},innB:{},target,balls:G.overs*6};
   setSkip(false);
+  save();
   if(!G.tut){
     showModal("<h3>HOW TO BAT</h3><p class='sm'>You're at the crease, looking down the pitch.<br><br>"+
       "1. PRESS &amp; HOLD — the bowler runs in.<br>"+
@@ -220,6 +222,7 @@ function hsCheck(bat){const ir=MT.U.innR[bat.id]||0;if(ir>bat.s.hs)bat.s.hs=ir;}
 function checkEnd(){
   const U=MT.U;
   if(U.w>=10||U.b>=U.balls||(U.target!=null&&U.runs>=U.target)||U.st>=U.xi.length)MT.endInn=true;
+  save(); // ball fully applied — checkpoint for tab-close resume
 }
 function setupShotAnim(wkt,r){
   let to,dur=600;
@@ -254,7 +257,7 @@ function endInnings(){
 // BOWLING (bowler's eye)
 // ============================================================
 function startUserBowl(target){
-  MT.mode="bowl";
+  MT.mode="bowl";MT.brk=false;
   const maxOv=Math.max(1,Math.ceil(G.overs/5));
   const ovLeft={};
   MT.myXI.forEach(p=>ovLeft[p.id]=maxOv);
@@ -264,6 +267,7 @@ function startUserBowl(target){
   MT.phase="b_pick";
   genField();
   setSkip(true);
+  save();
   if(!G.tutB){
     showModal("<h3>HOW TO BOWL</h3><p class='sm'>You're at the top of your mark, batter in your sights.<br><br>"+
       "1. MOVE the mouse to place the ✕ — your line &amp; length.<br>"+
@@ -337,8 +341,8 @@ function resolveBowl(acc){
 function applyBowlBall(){
   const B=MT.B,bw=B.bw,bat=B.xi[B.st],o=B.out;
   B.out=null;
-  if(o.kind==="nb"){B.runs++;bw.s.conc++;setFlash("NO BALL! +1","#ff5e5e");sfx("wkt");MT.phase="b_result";MT.t0=performance.now();return;}
-  if(o.kind==="wd"){B.runs++;bw.s.conc++;setFlash("WIDE +1","#ff5e5e");sfx("hit");MT.phase="b_result";MT.t0=performance.now();return;}
+  if(o.kind==="nb"){B.runs++;bw.s.conc++;setFlash("NO BALL! +1","#ff5e5e");sfx("wkt");MT.phase="b_result";MT.t0=performance.now();save();return;}
+  if(o.kind==="wd"){B.runs++;bw.s.conc++;setFlash("WIDE +1","#ff5e5e");sfx("hit");MT.phase="b_result";MT.t0=performance.now();save();return;}
   bat.s.balls++;bw.s.bb++;B.b++;
   B.innB[bat.id]=(B.innB[bat.id]||0)+1;
   const ang=R(Math.PI*2);
@@ -364,6 +368,7 @@ function applyBowlBall(){
   if(B.b%6===0&&B.b<B.balls)swapStrikeB();
   checkEndB();
   MT.phase="b_result";MT.t0=performance.now();
+  save(); // ball fully applied — checkpoint for tab-close resume
 }
 function swapStrikeB(){const B=MT.B;const t=B.st;B.st=B.ns;B.ns=t;}
 function checkEndB(){
@@ -404,6 +409,7 @@ function ui_skip(){
 function proceedInnings(){
   MT.inn++;
   if(MT.inn<2){
+    MT.brk=true;save(); // between-innings checkpoint
     const i1=MT.innings[0];
     const firstSide=MT.order[0]==="user"?MT.my:MT.opp;
     const chaser=MT.order[1]==="user"?"You need":(MT.opp.id+" need");
@@ -456,6 +462,69 @@ function playerOfMatch(won){
   return best;
 }
 function snapStats(list){const o={};for(const p of list)o[p.id]=[p.s.runs,p.s.wkts];return o;}
+
+// ============================================================
+// tab-close save / resume
+// mSnap() is called inside save() — G and the match snapshot are
+// always written atomically, so every checkpoint is self-consistent.
+// ============================================================
+function mSnap(){
+  if(!MT)return RESUME_M; // no live match: keep any pending snapshot
+  if(MT.done||!MT.order||MT.inn>=2)return null;
+  const base={stage:MT.stage,opp:MT.opp.id,
+    myXI:MT.myXI.map(p=>p.id),oppXI:MT.oppXI.map(p=>p.id),
+    order:MT.order,inn:MT.inn,innings:MT.innings,snap:MT.snap};
+  if(MT.brk)return{...base,brk:true};
+  const S=MT.mode==="bat"?MT.U:MT.mode==="bowl"?MT.B:null;
+  if(!S)return null;
+  const o={...base,mode:MT.mode,endInn:!!MT.endInn,
+    S:{st:S.st,ns:S.ns,nx:S.nx,runs:S.runs,w:S.w,b:S.b,
+       innR:S.innR,innB:S.innB,target:S.target,balls:S.balls}};
+  if(MT.mode==="bowl"){o.S.ovLeft=S.ovLeft;o.S.lastBw=S.lastBw;o.S.bw=S.bw?S.bw.id:null;}
+  return o;
+}
+function resumeMatch(){
+  const m=RESUME_M;RESUME_M=null;
+  const my=myTeam(),opp=m&&team(m.opp);
+  const pick=(t,ids)=>ids.map(id=>t.players.find(p=>p.id===id)).filter(Boolean);
+  const myXI=m?pick(my,m.myXI):[],oppXI=opp?pick(opp,m.oppXI):[];
+  if(!m||!opp||myXI.length!==m.myXI.length||oppXI.length!==m.oppXI.length){
+    save();showToast("COULDN'T RESUME — MATCH ABANDONED");goHub(G.curTab||"SQUAD");return;
+  }
+  MT={stage:m.stage,my,opp,myXI,oppXI,order:m.order,inn:m.inn,innings:m.innings,
+    snap:m.snap,
+    mode:"pre",phase:"pre",aim:-1.9,t0:0,T:700,bw:null,U:null,B:null,
+    drag:{on:false,sx:0,sy:0,len:0},lineX:0,drift:0,curve:0,wide:false,markerAt:0,
+    fd:[],anim:null,away:null,flash:null,timing:"",lineWarn:"",feed:"",sub:"",
+    shotAng:0,lastGap:null,pend:null,decideUntil:0,chase:null,particles:[],
+    crowd:genCrowdFP(),stars:genStars(),trail:[],
+    shakeUntil:0,cheerUntil:0,swingT0:0,hurtUntil:0,
+    raf:0,done:false,brk:false,endInn:false};
+  renderMatchScreen();
+  MT.raf=requestAnimationFrame(mLoop);
+  if(m.brk){beginInnings();return;} // rebuilds U/B fresh for the 2nd innings
+  const S=m.S;
+  if(m.mode==="bat"){
+    MT.mode="bat";
+    MT.U={xi:myXI,bws:bowlersOf(oppXI),runs:S.runs,w:S.w,b:S.b,st:S.st,ns:S.ns,nx:S.nx,
+      innR:S.innR,innB:S.innB,target:S.target,balls:S.balls};
+    setSkip(false);
+    if(m.endInn){MT.endInn=false;endInnings();}
+    else newBall();
+  }else{
+    MT.mode="bowl";
+    MT.B={xi:oppXI,st:S.st,ns:S.ns,nx:S.nx,runs:S.runs,w:S.w,b:S.b,
+      innR:S.innR,innB:S.innB,target:S.target,balls:S.balls,
+      ovLeft:S.ovLeft,lastBw:S.lastBw,
+      bw:S.bw!=null?myXI.find(p=>p.id===S.bw)||null:null,
+      tgt:{lx:2,len:0.7},needleT0:0,acc:0,out:null,justPicked:false};
+    genField();
+    setSkip(true);
+    if(m.endInn){MT.endInn=false;endInnings();}
+    else if(!MT.B.bw||(MT.B.b%6===0&&MT.B.b>0)){MT.phase="b_pick";pickBowlerModal();}
+    else newBowlBall();
+  }
+}
 function ui_afterMatch(){
   closeModal();
   if(MT)cancelAnimationFrame(MT.raf);
